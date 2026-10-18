@@ -1,0 +1,9 @@
+date,description,category,amount,currency,type
+2026-01-03,Campus cafe,food,6.50,USD,expense
+2026-01-05,Monthly scholarship,scholarship,1200.00,USD,income
+2026-01-07,City bus pass,transport,45.00,USD,expense
+2026-01-09,Shared apartment rent,rent,500.00,USD,expense
+2026-01-12,Grocery market,food,72.35,USD,expense
+2026-01-15,Textbook store,study materials,89.99,USD,expense
+2026-01-18,Part-time campus job,income,350.00,USD,income
+2026-01-21,Mobile phone plan,bills,32.00,USD,expense
