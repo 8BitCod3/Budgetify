@@ -41,6 +41,10 @@ def test_prompt_states_scopes_and_safety_limits():
     assert "Do not invent amounts" in prompt
     assert "1 to 3 sentences" in prompt
     assert "plain, natural, helpful language" in prompt
+    assert "under 60 words" in prompt
+    assert "qualified yes or no" in prompt
+    assert "projected ending balance" in prompt
+    assert "timing or other information is insufficient" in prompt
     with pytest.raises(AssistantError, match="under 2,000"):
         build_prompt("x" * 2001, {})
 
@@ -124,3 +128,31 @@ def test_context_accepts_personal_scope_and_currency():
     assert context["cash_flow_scope"] == "Personal Planning Mode schedule"
     assert context["total_expenses"] == "USD 40.00"
     assert "private detail" not in repr(context)
+
+
+def test_affordability_question_receives_projected_balance_and_timing_context():
+    context = build_context(
+        [],
+        1000,
+        250,
+        [
+            {
+                "date": "2026-11-01",
+                "description": "scheduled income",
+                "type": "income",
+                "category": "grant",
+                "amount": Decimal("430.00"),
+            }
+        ],
+        currency="USD",
+    )
+    client = FakeClient()
+    ask_budgetify(
+        "Can I afford another USD 250 expense at the end of the month?",
+        context,
+        secrets={"GEMINI_API_KEY": "test-key"},
+        client=client,
+    )
+    assert "USD 680.00" in client.models.contents
+    assert "end of the month" in client.models.contents
+    assert "Do not invent amounts" in client.models.contents
