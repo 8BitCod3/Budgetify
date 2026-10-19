@@ -271,6 +271,22 @@ def test_project_cash_flow_handles_empty_schedule():
     assert project_cash_flow(Decimal("100.00"), []) == []
 
 
+def test_project_cash_flow_accepts_historical_event_dates():
+    projection = project_cash_flow(
+        Decimal("100.00"),
+        [
+            {
+                "date": "2020-01-01",
+                "description": "Historical food expense",
+                "type": "expense",
+                "category": "food",
+                "amount": Decimal("25.00"),
+            }
+        ],
+    )
+    assert projection[0]["projected_balance"] == Decimal("75.00")
+
+
 def test_project_cash_flow_preserves_stable_event_id():
     projection = project_cash_flow(
         Decimal("100.00"),

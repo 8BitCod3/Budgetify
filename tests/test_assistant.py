@@ -45,6 +45,7 @@ def test_prompt_states_scopes_and_safety_limits():
     assert "qualified yes or no" in prompt
     assert "projected ending balance" in prompt
     assert "timing or other information is insufficient" in prompt
+    assert "opening balance before the earliest" in prompt
     with pytest.raises(AssistantError, match="under 2,000"):
         build_prompt("x" * 2001, {})
 
@@ -126,6 +127,10 @@ def test_context_accepts_personal_scope_and_currency():
     )
     assert context["transaction_scope"] == "Scheduled personal cash-flow aggregates"
     assert context["cash_flow_scope"] == "Personal Planning Mode schedule"
+    assert (
+        context["budget_scope"]
+        == "all supplied active entries; no date-bounded reporting period"
+    )
     assert context["total_expenses"] == "USD 40.00"
     assert "private detail" not in repr(context)
 
@@ -156,3 +161,34 @@ def test_affordability_question_receives_projected_balance_and_timing_context():
     assert "USD 680.00" in client.models.contents
     assert "end of the month" in client.models.contents
     assert "Do not invent amounts" in client.models.contents
+
+
+def test_context_exposes_historical_and_upcoming_counts_without_descriptions():
+    context = build_context(
+        [],
+        1000,
+        250,
+        [
+            {
+                "date": "2020-01-01",
+                "description": "historical private detail",
+                "type": "expense",
+                "category": "food",
+                "amount": Decimal("25.00"),
+            },
+            {
+                "date": "2099-01-01",
+                "description": "future private detail",
+                "type": "expense",
+                "category": "rent",
+                "amount": Decimal("100.00"),
+            },
+        ],
+    )
+    assert context["cash_flow_historical_event_count"] == 1
+    assert context["cash_flow_upcoming_event_count"] == 1
+    assert (
+        context["cash_flow_balance_semantics"]
+        == "initial balance is the opening balance before the earliest supplied event"
+    )
+    assert "private detail" not in repr(context)

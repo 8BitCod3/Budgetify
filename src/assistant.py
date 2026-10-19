@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -78,6 +79,7 @@ def build_context(
     *,
     transaction_scope: str = "sample CSV transaction aggregates",
     cash_flow_scope: str = "active selected-mode scheduled cash-flow aggregates",
+    budget_scope: str = "all supplied active entries; no date-bounded reporting period",
     currency: str = "",
 ) -> dict[str, object]:
     """Build aggregate facts only; raw records and descriptions are excluded."""
@@ -87,9 +89,11 @@ def build_context(
     budget = assess_budget(transaction_records, budget_limit)
     projection = project_cash_flow(initial_balance, event_records)
     shortfalls = identify_projected_shortfalls(initial_balance, event_records)
+    today = date.today()
     return {
         "transaction_scope": transaction_scope,
         "cash_flow_scope": cash_flow_scope,
+        "budget_scope": budget_scope,
         "transaction_count": len(transaction_records),
         "total_income": _money(
             total_by_type(transaction_records, "income"), currency
@@ -113,6 +117,19 @@ def build_context(
             "status": budget["status"],
         },
         "cash_flow_event_count": len(event_records),
+        "cash_flow_historical_event_count": sum(
+            1
+            for event in event_records
+            if str(event["date"]) < today.isoformat()
+        ),
+        "cash_flow_upcoming_event_count": sum(
+            1
+            for event in event_records
+            if str(event["date"]) >= today.isoformat()
+        ),
+        "cash_flow_balance_semantics": (
+            "initial balance is the opening balance before the earliest supplied event"
+        ),
         "cash_flow_initial_balance": _money(initial_balance, currency),
         "cash_flow_projected_ending_balance": (
             _money(projection[-1]["projected_balance"], currency)
@@ -157,6 +174,9 @@ def build_prompt(question: str, context: Mapping[str, object]) -> str:
         "other information is insufficient. Mention a budget overrun or upcoming "
         "cash-flow risk in one short phrase when relevant. Give at most one "
         "practical next step. Avoid generic disclaimers, "
+        "Treat the supplied initial balance as an opening balance before the earliest "
+        "supplied event; do not double-count historical events already reflected in "
+        "a current balance. The budget figures cover the stated budget scope only. "
         "repeated headings, and lengthy assumption lists unless a limitation "
         "materially affects the answer. "
         "Return plain text only; never return executable code or HTML.\n\n"

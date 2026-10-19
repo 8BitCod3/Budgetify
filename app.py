@@ -290,10 +290,23 @@ def dashboard_transactions(
                 "amount": float(event["amount"]),
                 "currency": currency,
                 "type": event["type"],
+                "timing": (
+                    "Historical entry"
+                    if str(event["date"]) < date.today().isoformat()
+                    else "Upcoming scheduled entry"
+                ),
             }
             for event in events
         ],
-        columns=["date", "description", "category", "amount", "currency", "type"],
+        columns=[
+            "date",
+            "description",
+            "category",
+            "amount",
+            "currency",
+            "type",
+            "timing",
+        ],
     )
     return (
         personal_transactions,
@@ -308,12 +321,14 @@ def render_financial_insights(
     initial_balance: float,
     events: list[dict[str, object]],
     currency: str,
+    transaction_scope: str,
+    budget_scope: str,
 ) -> None:
     """Render deterministic insights without changing existing dashboard flows."""
     st.subheader("Financial Insights")
     st.caption(
-        "Insights are descriptive summaries of the synthetic transaction data and "
-        "the selected cash-flow schedule; they are not financial advice."
+        f"Insights use {transaction_scope.lower()} and {budget_scope}. "
+        "They are descriptive summaries, not financial advice."
     )
     records = transactions.to_dict(orient="records")
     try:
@@ -402,6 +417,7 @@ def render_ask_budgetify(
     events: list[dict[str, object]],
     transaction_scope: str,
     cash_flow_scope: str,
+    budget_scope: str,
     currency: str,
 ) -> None:
     st.subheader("Ask Budgetify")
@@ -424,6 +440,7 @@ def render_ask_budgetify(
                 events,
                 transaction_scope=transaction_scope,
                 cash_flow_scope=cash_flow_scope,
+                budget_scope=budget_scope,
                 currency=currency,
             )
             try:
@@ -499,8 +516,9 @@ def render_cash_flow(display_currency: str) -> None:
             st.session_state.personal_initial_balance = initial_balance
             persist_personal_state()
         st.caption(
-            "Personal Planning Mode starts at the balance entered above; "
-            "it defaults to USD 0.00."
+            "This is the opening balance before the listed events, defaulting to "
+            "USD 0.00. If it is already a current balance, do not also enter events "
+            "already included in that balance."
         )
 
     st.markdown("**Add a hypothetical event**")
@@ -522,8 +540,11 @@ def render_cash_flow(display_currency: str) -> None:
         event_date = st.date_input(
             "Date",
             value=date.today(),
-            min_value=date.today(),
             key="cash_flow_event_date",
+            help=(
+                "Historical dates are allowed. Events are always projected in "
+                "chronological order from the opening balance."
+            ),
         )
         category_label_value = st.selectbox(
             "Category",
@@ -666,6 +687,13 @@ def render_cash_flow(display_currency: str) -> None:
             "shortfall": "Projected shortfall",
         }
     )
+    cash_flow_table["Timing"] = cash_flow_table["Date"].apply(
+        lambda event_date: (
+            "Historical entry"
+            if event_date < date.today()
+            else "Upcoming scheduled entry"
+        )
+    )
     cash_flow_table["Amount"] = cash_flow_table["Amount"].apply(
         lambda amount: format_amount(float(amount), display_currency)
     )
@@ -736,6 +764,8 @@ def main() -> None:
             if active_mode == "Demo Mode"
             else "Personal scheduled-entry tracker"
         )
+        if active_mode == "Personal Planning Mode":
+            st.caption("All active personal entries; no date-bounded reporting period")
         st.metric(
             "Monthly spending limit",
             format_amount(budget["limit"], display_currency),
@@ -814,6 +844,8 @@ def main() -> None:
             "currency": "Currency",
             "type": "Type",
         }
+        if "timing" in filtered.columns:
+            display_columns["timing"] = "Timing"
         history = filtered[list(display_columns)].rename(columns=display_columns)
         history["Amount"] = history.apply(
             lambda row: format_amount(row["Amount"], row["Currency"]),
@@ -837,6 +869,12 @@ def main() -> None:
         active_initial_balance,
         st.session_state.cash_flow_events,
         display_currency,
+        transaction_scope,
+        (
+            "full synthetic sample period"
+            if active_mode == "Demo Mode"
+            else "all personal scheduled entries; no date-bounded reporting period"
+        ),
     )
     render_ask_budgetify(
         active_transactions,
@@ -848,6 +886,11 @@ def main() -> None:
             "active Demo Mode scheduled cash-flow aggregates"
             if active_mode == "Demo Mode"
             else "active Personal Planning Mode scheduled cash-flow aggregates"
+        ),
+        (
+            "full synthetic sample period"
+            if active_mode == "Demo Mode"
+            else "all personal scheduled entries; no date-bounded reporting period"
         ),
         display_currency,
     )

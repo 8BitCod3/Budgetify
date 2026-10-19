@@ -1,4 +1,5 @@
 import pandas as pd
+from datetime import date, timedelta
 from decimal import Decimal
 
 from app import dashboard_transactions
@@ -77,3 +78,23 @@ def test_personal_budget_uses_personal_scheduled_expenses_only():
     budget = budget_summary(active.to_dict(orient="records"), 500.0)
     assert budget["expenses"] == 400.0
     assert budget["remaining"] == 100.0
+
+
+def test_personal_entries_are_labeled_by_historical_or_upcoming_date():
+    events = [
+        {
+            **PERSONAL_EVENTS[0],
+            "date": (date.today() - timedelta(days=1)).isoformat(),
+        },
+        {
+            **PERSONAL_EVENTS[1],
+            "date": (date.today() + timedelta(days=1)).isoformat(),
+        },
+    ]
+    active, _, _ = dashboard_transactions(
+        SAMPLE, "Personal Planning Mode", events, "USD"
+    )
+    assert active["timing"].tolist() == [
+        "Historical entry",
+        "Upcoming scheduled entry",
+    ]
