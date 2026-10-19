@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 from src.finance import (
     CASH_FLOW_CATEGORIES,
@@ -14,6 +15,7 @@ from src.finance import (
     spending_by_category,
     total_by_type,
 )
+from src.assistant import AssistantError, ask_budgetify, build_context
 from src.insights import (
     assess_budget,
     generate_recommendations,
@@ -264,6 +266,42 @@ def categories_for_event_type(event_type: str) -> tuple[str, ...]:
         ) from error
 
 
+def dashboard_transactions(
+    sample_transactions: pd.DataFrame,
+    mode: str,
+    events: list[dict[str, object]],
+    currency: str,
+) -> tuple[pd.DataFrame, str, str]:
+    """Return the one transaction-like dataset displayed by the active mode."""
+    if mode == "Demo Mode":
+        return (
+            sample_transactions.copy(),
+            "Recorded sample transactions",
+            "Net balance",
+        )
+    if mode != "Personal Planning Mode":
+        raise ValueError(f"Unsupported cash-flow mode: {mode}")
+    personal_transactions = pd.DataFrame(
+        [
+            {
+                "date": event["date"],
+                "description": event["description"],
+                "category": event["category"],
+                "amount": event["amount"],
+                "currency": currency,
+                "type": event["type"],
+            }
+            for event in events
+        ],
+        columns=["date", "description", "category", "amount", "currency", "type"],
+    )
+    return (
+        personal_transactions,
+        "Scheduled personal cash-flow entries",
+        "Net scheduled cash flow",
+    )
+
+
 def render_financial_insights(
     transactions: pd.DataFrame,
     budget_limit: float,
@@ -355,6 +393,52 @@ def render_financial_insights(
     st.markdown("**Recommendations**")
     for recommendation in recommendations:
         st.write(f"- {recommendation}")
+
+
+def render_ask_budgetify(
+    transactions: pd.DataFrame,
+    budget_limit: float,
+    initial_balance: float,
+    events: list[dict[str, object]],
+    transaction_scope: str,
+    cash_flow_scope: str,
+    currency: str,
+) -> None:
+    st.subheader("Ask Budgetify")
+    st.caption(
+        "Ask about the sample transaction aggregates or the active scheduled "
+        "cash-flow plan. Gemini receives only summarized figures, not descriptions "
+        "or transaction history."
+    )
+    question = st.text_input(
+        "Your question",
+        placeholder="How much of the sample budget has been used?",
+        key="ask_budgetify_question",
+    )
+    if st.button("Ask Budgetify", key="ask_budgetify_submit"):
+        try:
+            context = build_context(
+                transactions.to_dict(orient="records"),
+                budget_limit,
+                initial_balance,
+                events,
+                transaction_scope=transaction_scope,
+                cash_flow_scope=cash_flow_scope,
+                currency=currency,
+            )
+            try:
+                streamlit_secrets = st.secrets
+            except StreamlitSecretNotFoundError:
+                streamlit_secrets = {}
+            answer = ask_budgetify(
+                question,
+                context,
+                secrets=streamlit_secrets,
+            )
+        except AssistantError as error:
+            st.warning(str(error))
+        else:
+            st.text(answer)
 
 
 def render_cash_flow(display_currency: str) -> None:
@@ -619,25 +703,39 @@ def main() -> None:
         st.error(f"Unable to load transaction data: {error}")
         return
 
-    if transactions.empty:
-        st.info("No transactions are available in the sample data.")
-        return
-
     currencies = sorted(transactions["currency"].dropna().unique().tolist())
     currency_label = ", ".join(currencies) if currencies else "unspecified currency"
-    st.caption(
-        f"All amounts are illustrative sample data ({currency_label}); "
-        "they are not connected to a real bank account."
-    )
-    st.caption(
-        "The Monthly Budget tracker covers this synthetic sample period, "
-        "not the current calendar month."
-    )
-
-    budget = budget_summary(transactions.to_dict(orient="records"), spending_limit)
     display_currency = currencies[0] if len(currencies) == 1 else "CUR"
+    active_mode = st.session_state.cash_flow_mode
+    active_transactions, transaction_scope, net_label = dashboard_transactions(
+        transactions,
+        active_mode,
+        st.session_state.cash_flow_events,
+        display_currency,
+    )
+    if active_mode == "Demo Mode":
+        st.caption(
+            f"All amounts are illustrative sample data ({currency_label}); "
+            "they are not connected to a real bank account."
+        )
+        st.caption(
+            "The Monthly Budget tracker covers this synthetic sample period, "
+            "not the current calendar month."
+        )
+    else:
+        st.caption(
+            "Personal Planning Mode shows scheduled entries entered in this plan. "
+            "They are not completed bank transactions."
+        )
+
+    active_records = active_transactions.to_dict(orient="records")
+    budget = budget_summary(active_records, spending_limit)
     with st.sidebar:
-        st.caption("Sample-period tracker")
+        st.caption(
+            "Sample-period tracker"
+            if active_mode == "Demo Mode"
+            else "Personal scheduled-entry tracker"
+        )
         st.metric(
             "Monthly spending limit",
             format_amount(budget["limit"], display_currency),
@@ -657,7 +755,9 @@ def main() -> None:
                 "The spending limit is zero. Set a limit to track remaining budget."
             )
         elif budget["expenses"] >= budget["limit"]:
-            st.warning("Sample-period spending has reached or exceeded the limit.")
+            st.warning(
+                "Spending has reached or exceeded the active planning limit."
+            )
 
     filter_label = st.selectbox(
         "Transaction type",
@@ -668,7 +768,9 @@ def main() -> None:
         "Income only": {"income"},
         "Expenses only": {"expense"},
     }
-    filtered = transactions[transactions["type"].isin(filter_types[filter_label])]
+    filtered = active_transactions[
+        active_transactions["type"].isin(filter_types[filter_label])
+    ]
     records = filtered.to_dict(orient="records")
 
     income = total_by_type(records, "income")
@@ -683,11 +785,12 @@ def main() -> None:
     metric_columns[1].metric(
         "Total expenses", format_amount(expenses, display_currency)
     )
-    metric_columns[2].metric(
-        "Net balance", format_amount(balance, display_currency)
-    )
+    metric_columns[2].metric(net_label, format_amount(balance, display_currency))
     metric_columns[3].metric("Number of transactions", transaction_count)
-    st.caption(f"Metrics reflect the selected view: {filter_label.lower()}.")
+    st.caption(
+        f"{transaction_scope}; metrics reflect the selected view: "
+        f"{filter_label.lower()}."
+    )
 
     chart_column, table_column = st.columns((1, 2))
     with chart_column:
@@ -729,10 +832,23 @@ def main() -> None:
         else st.session_state.personal_initial_balance
     )
     render_financial_insights(
-        transactions,
+        active_transactions,
         spending_limit,
         active_initial_balance,
         st.session_state.cash_flow_events,
+        display_currency,
+    )
+    render_ask_budgetify(
+        active_transactions,
+        spending_limit,
+        active_initial_balance,
+        st.session_state.cash_flow_events,
+        transaction_scope,
+        (
+            "active Demo Mode scheduled cash-flow aggregates"
+            if active_mode == "Demo Mode"
+            else "active Personal Planning Mode scheduled cash-flow aggregates"
+        ),
         display_currency,
     )
 
