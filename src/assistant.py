@@ -26,6 +26,34 @@ DEFAULT_MODEL = "gemini-3.5-flash-lite"
 MAX_QUESTION_LENGTH = 2000
 MAX_RESPONSE_LENGTH = 4000
 DATE_RANGE_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b.*?\b(\d{4}-\d{2}-\d{2})\b")
+DATE_PATTERN = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+MONTH_DAY_PATTERN = re.compile(
+    r"\b("
+    r"January|February|March|April|May|June|July|August|September|October|"
+    r"November|December"
+    r")\s+(\d{1,2})(?:st|nd|rd|th)?\b",
+    re.IGNORECASE,
+)
+MONTHS = {
+    month.lower(): index
+    for index, month in enumerate(
+        (
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ),
+        start=1,
+    )
+}
 
 
 class AssistantError(Exception):
@@ -95,6 +123,43 @@ def _expense_total(
     return round(total, 2)
 
 
+def _requested_date(
+    question: str,
+    projection: Iterable[Mapping[str, object]],
+) -> date | None:
+    iso_dates = DATE_PATTERN.findall(question)
+    if len(iso_dates) == 1:
+        return date.fromisoformat(iso_dates[0])
+    if iso_dates:
+        return None
+
+    month_day = MONTH_DAY_PATTERN.search(question)
+    if not month_day:
+        return None
+    month = MONTHS[month_day.group(1).lower()]
+    day = int(month_day.group(2))
+    projection_records = tuple(projection)
+    schedule_years = {
+        event["date"].year
+        for event in projection_records
+        if isinstance(event.get("date"), date)
+    }
+    matching_years = {
+        event["date"].year
+        for event in projection_records
+        if isinstance(event.get("date"), date)
+        and event["date"].month == month
+        and event["date"].day == day
+    }
+    candidate_years = matching_years or schedule_years
+    if len(candidate_years) != 1:
+        return None
+    try:
+        return date(next(iter(candidate_years)), month, day)
+    except ValueError:
+        return None
+
+
 def build_context(
     transactions: Iterable[Transaction],
     budget_limit: object,
@@ -129,6 +194,19 @@ def build_context(
                 _expense_total(transaction_records, start, end), currency
             ),
         }
+    requested_date = None
+    requested_date_balance = None
+    if not requested_range:
+        requested_date = _requested_date(question, projection)
+    if requested_date is not None:
+        requested_projection = [
+            event for event in projection if event["date"] <= requested_date
+        ]
+        requested_date_balance = (
+            requested_projection[-1]["projected_balance"]
+            if requested_projection
+            else initial_balance
+        )
     return {
         "transaction_scope": transaction_scope,
         "cash_flow_scope": cash_flow_scope,
@@ -158,7 +236,19 @@ def build_context(
         "spending_through_today": _money(
             _expense_total(transaction_records, end=today), currency
         ),
+        "spending_today": _money(
+            _expense_total(transaction_records, start=today, end=today),
+            currency,
+        ),
         "requested_date_range_spending": range_summary,
+        "cash_flow_requested_date": (
+            requested_date.isoformat() if requested_date else None
+        ),
+        "cash_flow_projected_balance_at_requested_date": (
+            _money(requested_date_balance, currency)
+            if requested_date_balance is not None
+            else None
+        ),
         "cash_flow_event_count": len(event_records),
         "cash_flow_historical_event_count": sum(
             1
@@ -217,6 +307,11 @@ def build_prompt(question: str, context: Mapping[str, object]) -> str:
         "other information is insufficient. Mention a budget overrun or upcoming "
         "cash-flow risk in one short phrase when relevant. Give at most one "
         "practical next step. Avoid generic disclaimers, "
+        "When an exact requested date and projected balance at that date are "
+        "supplied, use that date-specific fact directly and do not hedge about "
+        "the date's availability. "
+        "For questions about spending today, use spending_today; do not substitute "
+        "spending_through_today, which includes earlier dates. "
         "Treat the supplied initial balance as an opening balance before the earliest "
         "supplied event; do not double-count historical events already reflected in "
         "a current balance. The budget figures cover the stated budget scope only. "

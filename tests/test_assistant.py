@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import date
 
 import pytest
 
@@ -210,3 +211,146 @@ def test_context_calculates_today_and_inclusive_requested_range_spending():
     )
     assert context["requested_date_range_spending"]["expenses"] == "USD 30.00"
     assert context["spending_through_today"] == "USD 30.00"
+
+
+def test_context_calculates_requested_date_balance_without_later_events():
+    context = build_context(
+        [],
+        1000,
+        1000,
+        [
+            {
+                "date": "2026-10-24",
+                "description": "private event detail",
+                "type": "expense",
+                "category": "food",
+                "amount": Decimal("300.00"),
+            },
+            {
+                "date": "2026-10-31",
+                "description": "private event detail",
+                "type": "expense",
+                "category": "bills",
+                "amount": Decimal("90.00"),
+            },
+            {
+                "date": "2026-11-01",
+                "description": "private event detail",
+                "type": "income",
+                "category": "grant",
+                "amount": Decimal("500.00"),
+            },
+        ],
+        currency="USD",
+        question="What is my projected balance on 2026-10-31?",
+    )
+    assert context["cash_flow_requested_date"] == "2026-10-31"
+    assert context["cash_flow_projected_balance_at_requested_date"] == "USD 610.00"
+    assert "private event detail" not in repr(context)
+
+
+def test_context_resolves_natural_language_requested_date_from_schedule_year():
+    context = build_context(
+        [],
+        1000,
+        1000,
+        [
+            {
+                "date": "2026-10-24",
+                "description": "private event detail",
+                "type": "expense",
+                "category": "food",
+                "amount": Decimal("300.00"),
+            },
+            {
+                "date": "2026-10-31",
+                "description": "private event detail",
+                "type": "expense",
+                "category": "bills",
+                "amount": Decimal("90.00"),
+            },
+            {
+                "date": "2026-11-01",
+                "description": "private event detail",
+                "type": "income",
+                "category": "grant",
+                "amount": Decimal("500.00"),
+            },
+        ],
+        currency="USD",
+        question=(
+            "What is my projected balance on October 31 after all scheduled "
+            "income and expenses?"
+        ),
+    )
+    assert context["cash_flow_requested_date"] == "2026-10-31"
+    assert context["cash_flow_projected_balance_at_requested_date"] == "USD 610.00"
+    assert "private event detail" not in repr(context)
+
+
+def test_context_leaves_natural_language_date_unresolved_when_schedule_year_is_ambiguous():
+    context = build_context(
+        [],
+        1000,
+        1000,
+        [
+            {
+                "date": "2026-10-31",
+                "description": "private event detail",
+                "type": "expense",
+                "category": "food",
+                "amount": Decimal("100.00"),
+            },
+            {
+                "date": "2027-10-31",
+                "description": "private event detail",
+                "type": "expense",
+                "category": "food",
+                "amount": Decimal("200.00"),
+            },
+        ],
+        currency="USD",
+        question="What is my projected balance on October 31?",
+    )
+    assert context["cash_flow_requested_date"] is None
+    assert context["cash_flow_projected_balance_at_requested_date"] is None
+
+
+def test_context_distinguishes_spending_today_from_spending_through_today(
+    monkeypatch,
+):
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 20)
+
+    monkeypatch.setattr("src.assistant.date", FixedDate)
+    context = build_context(
+        [
+            {
+                "date": "2026-10-01",
+                "type": "expense",
+                "category": "food",
+                "amount": 245,
+            },
+            {
+                "date": "2026-10-20",
+                "type": "expense",
+                "category": "food",
+                "amount": 65,
+            },
+            {
+                "date": "2026-10-24",
+                "type": "expense",
+                "category": "food",
+                "amount": 300,
+            },
+        ],
+        1000,
+        0,
+        [],
+        currency="USD",
+        question="How much have I spent so far today?",
+    )
+    assert context["spending_today"] == "USD 65.00"
+    assert context["spending_through_today"] == "USD 310.00"

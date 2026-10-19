@@ -3,6 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import app
+import pytest
 
 
 PERSONAL_EVENT = {
@@ -172,4 +173,114 @@ def test_cash_flow_state_initializes_when_persistent_state_already_exists(
     app.initialize_cash_flow_state()
 
     assert "cash_flow_events" in session_state
+    assert len(session_state["cash_flow_events"]) == len(app.SAMPLE_CASH_FLOW_EVENTS)
+
+
+def test_clear_saved_personal_data_resets_state_and_reruns(monkeypatch):
+    session_state = SessionState(
+        {
+            "cash_flow_mode": "Personal Planning Mode",
+            "cash_flow_events": [PERSONAL_EVENT],
+            "personal_cash_flow_events": [PERSONAL_EVENT],
+            "personal_initial_balance": 125.5,
+            "personal_initial_balance_input": 125.5,
+            "spending_limit": 900.0,
+            "storage_signature": "old-signature",
+            "storage_load_warning": "old warning",
+            "storage_save_warning": "old save warning",
+        }
+    )
+    reruns = []
+    monkeypatch.setattr(app, "st", SimpleNamespace(
+        session_state=session_state,
+        rerun=lambda: reruns.append(True),
+        error=lambda message: pytest.fail(message),
+    ))
+    cleared = []
+    monkeypatch.setattr(
+        app,
+        "clear_personal_state",
+        lambda: cleared.append(True),
+    )
+
+    app.clear_saved_personal_data()
+
+    assert cleared == [True]
+    assert session_state["personal_cash_flow_events"] == []
+    assert session_state["personal_initial_balance"] == 0.0
+    assert session_state["personal_initial_balance_input"] == 0.0
+    assert session_state["spending_limit"] == 500.0
+    assert session_state["cash_flow_mode"] == "Demo Mode"
+    assert len(session_state["cash_flow_events"]) == len(app.SAMPLE_CASH_FLOW_EVENTS)
+    assert session_state["storage_signature"] is None
+    assert session_state["storage_load_warning"] is None
+    assert session_state["storage_save_warning"] is None
+    assert reruns == [True]
+
+
+def test_clear_saved_personal_data_storage_failure_preserves_state(monkeypatch):
+    session_state = SessionState(
+        {
+            "cash_flow_mode": "Personal Planning Mode",
+            "cash_flow_events": [PERSONAL_EVENT],
+            "personal_cash_flow_events": [PERSONAL_EVENT],
+            "personal_initial_balance": 125.5,
+            "personal_initial_balance_input": 125.5,
+            "spending_limit": 900.0,
+        }
+    )
+    errors = []
+    reruns = []
+    monkeypatch.setattr(app, "st", SimpleNamespace(
+        session_state=session_state,
+        rerun=lambda: reruns.append(True),
+        error=errors.append,
+    ))
+    monkeypatch.setattr(
+        app,
+        "clear_personal_state",
+        lambda: (_ for _ in ()).throw(
+            app.StorageError("saved personal planning data could not be cleared")
+        ),
+    )
+
+    app.clear_saved_personal_data()
+
+    assert errors == ["saved personal planning data could not be cleared"]
+    assert reruns == []
+    assert session_state["cash_flow_mode"] == "Personal Planning Mode"
+    assert session_state["cash_flow_events"] == [PERSONAL_EVENT]
+    assert session_state["personal_cash_flow_events"] == [PERSONAL_EVENT]
+    assert session_state["personal_initial_balance"] == 125.5
+    assert session_state["personal_initial_balance_input"] == 125.5
+    assert session_state["spending_limit"] == 900.0
+
+
+def test_clear_saved_personal_data_does_not_restore_stale_events_on_reinitialization(
+    monkeypatch,
+):
+    session_state = SessionState(
+        {
+            "persistent_state_initialized": True,
+            "cash_flow_mode": "Personal Planning Mode",
+            "cash_flow_events": [PERSONAL_EVENT],
+            "personal_cash_flow_events": [PERSONAL_EVENT],
+            "personal_initial_balance": 125.5,
+            "personal_initial_balance_input": 125.5,
+            "spending_limit": 900.0,
+        }
+    )
+    monkeypatch.setattr(app, "st", SimpleNamespace(
+        session_state=session_state,
+        rerun=lambda: None,
+        error=lambda message: pytest.fail(message),
+    ))
+    monkeypatch.setattr(app, "clear_personal_state", lambda: None)
+
+    app.clear_saved_personal_data()
+    session_state.pop("cash_flow_events")
+    app.initialize_cash_flow_state()
+
+    assert session_state["cash_flow_mode"] == "Demo Mode"
+    assert session_state["personal_cash_flow_events"] == []
     assert len(session_state["cash_flow_events"]) == len(app.SAMPLE_CASH_FLOW_EVENTS)

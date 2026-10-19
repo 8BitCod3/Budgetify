@@ -190,6 +190,29 @@ def persist_personal_state(force: bool = False) -> None:
     st.session_state.storage_signature = signature
 
 
+def clear_saved_personal_data() -> None:
+    """Clear durable personal data and reset the active app state."""
+    try:
+        clear_personal_state()
+    except StorageError as error:
+        st.error(str(error))
+        return
+
+    defaults = default_personal_state()
+    default_initial_balance = float(defaults["personal_initial_balance"])
+    default_spending_limit = float(defaults["spending_limit"])
+    st.session_state.personal_cash_flow_events = []
+    st.session_state.personal_initial_balance = default_initial_balance
+    st.session_state.personal_initial_balance_input = default_initial_balance
+    st.session_state.spending_limit = default_spending_limit
+    st.session_state.cash_flow_mode = "Demo Mode"
+    st.session_state.cash_flow_events = reset_events_for_mode("Demo Mode")
+    st.session_state.storage_signature = None
+    st.session_state.storage_load_warning = None
+    st.session_state.storage_save_warning = None
+    st.rerun()
+
+
 def initialize_persistent_state() -> None:
     required_state_keys = (
         "cash_flow_mode",
@@ -760,31 +783,11 @@ def render_cash_flow(display_currency: str) -> None:
             "I understand this permanently clears saved personal planning data.",
             key="confirm_clear_saved_personal_data",
         )
-        if st.button(
+        st.button(
             "Clear Saved Personal Planning Data",
             disabled=not clear_confirmation,
-        ):
-            try:
-                clear_personal_state()
-            except StorageError as error:
-                st.error(str(error))
-            else:
-                defaults = default_personal_state()
-                st.session_state.personal_cash_flow_events = []
-                st.session_state.personal_initial_balance = float(
-                    defaults["personal_initial_balance"]
-                )
-                st.session_state.spending_limit = float(
-                    defaults["spending_limit"]
-                )
-                st.session_state.cash_flow_mode = "Demo Mode"
-                st.session_state.cash_flow_events = reset_events_for_mode(
-                    "Demo Mode"
-                )
-                st.session_state.storage_signature = None
-                st.session_state.storage_load_warning = None
-                st.session_state.storage_save_warning = None
-                st.rerun()
+            on_click=clear_saved_personal_data,
+        )
 
     events = st.session_state.cash_flow_events
     try:
@@ -792,33 +795,6 @@ def render_cash_flow(display_currency: str) -> None:
     except ValueError as error:
         st.error(f"Unable to calculate the cash-flow schedule: {error}")
         return
-
-    if cash_flow:
-        st.markdown("**Remove an event**")
-        for event in cash_flow:
-            event_row, remove_column = st.columns((5, 1))
-            with event_row:
-                st.write(f"{event['description']} — {event['date']}")
-            with remove_column:
-                remove_event = st.button(
-                    "Remove",
-                    key=f"remove_cash_flow_{event['id']}",
-                    use_container_width=True,
-                )
-            if remove_event:
-                st.session_state.cash_flow_events = [
-                    item
-                    for item in st.session_state.cash_flow_events
-                    if item["id"] != event["id"]
-                ]
-                if selected_mode == "Personal Planning Mode":
-                    st.session_state.personal_cash_flow_events = [
-                        item
-                        for item in st.session_state.personal_cash_flow_events
-                        if item["id"] != event["id"]
-                    ]
-                    persist_personal_state()
-                st.rerun()
 
     if not cash_flow:
         st.info("No cash-flow events are scheduled.")
@@ -836,7 +812,64 @@ def render_cash_flow(display_currency: str) -> None:
         st.success("No projected shortfalls in the selected planning schedule.")
 
     cash_flow_table = cash_flow_display_table(cash_flow, display_currency)
-    st.dataframe(cash_flow_table, hide_index=True, use_container_width=True)
+    st.markdown("**Remove an event**")
+    column_widths = (1.25, 1.2, 3.5, 1.25, 2.0, 1.45, 2.1, 1.35, 2.1)
+    with st.container(border=True, key="budgetify-cash-flow-table"):
+        with st.container(border=True, key="budgetify-cash-flow-header"):
+            header_columns = st.columns(column_widths)
+            header_columns[0].markdown("**Remove**")
+            for column, label in zip(header_columns[1:], cash_flow_table.columns):
+                column.markdown(f"**{label}**")
+
+        for row_index, (event, row) in enumerate(
+            zip(cash_flow, cash_flow_table.itertuples(index=False, name=None))
+        ):
+            with st.container(
+                border=True,
+                key=f"budgetify-cash-flow-row-{row_index}",
+            ):
+                row_columns = st.columns(column_widths)
+                with row_columns[0]:
+                    remove_event = st.button(
+                        "Remove",
+                        key=f"remove_cash_flow_{event['id']}",
+                        use_container_width=True,
+                    )
+                if remove_event:
+                    st.session_state.cash_flow_events = [
+                        item
+                        for item in st.session_state.cash_flow_events
+                        if item["id"] != event["id"]
+                    ]
+                    if selected_mode == "Personal Planning Mode":
+                        st.session_state.personal_cash_flow_events = [
+                            item
+                            for item in st.session_state.personal_cash_flow_events
+                            if item["id"] != event["id"]
+                        ]
+                        persist_personal_state()
+                    st.rerun()
+                for column_index, (column, value) in enumerate(
+                    zip(row_columns[1:], row)
+                ):
+                    if column_index == 6:
+                        badge_color = "#4ade80" if not value else "#f87171"
+                        badge_background = "#163a2b" if not value else "#45232b"
+                        column.markdown(
+                            f'<span style="display:inline-block; padding:0.2rem '
+                            f'0.5rem; border-radius:999px; background:{badge_background}; '
+                            f'color:{badge_color}; font-size:0.8rem; font-weight:600;">'
+                            f"{value}</span>",
+                            unsafe_allow_html=True,
+                        )
+                    elif column_index == 7 and event["shortfall"] > 0:
+                        column.markdown(
+                            f'<span style="color:#f87171; font-weight:600;">'
+                            f"{value}</span>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        column.write(value)
 
     if selected_mode == "Personal Planning Mode":
         projection_view, shortfall_view = st.tabs(
@@ -872,6 +905,118 @@ def render_cash_flow(display_currency: str) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Budgetify", page_icon="💸", layout="wide")
+    st.markdown(
+        """
+        <style>
+        :root {
+            --budgetify-background: #0b1220;
+            --budgetify-sidebar: #101a2b;
+            --budgetify-surface: #151f30;
+            --budgetify-border: #29384d;
+            --budgetify-text: #f1f5f9;
+            --budgetify-muted: #a6b4c8;
+            --budgetify-teal: #14b8a6;
+            --budgetify-teal-dark: #0f9488;
+        }
+
+        .stApp {
+            background: var(--budgetify-background);
+            color: var(--budgetify-text);
+        }
+
+        [data-testid="stAppViewContainer"] .main .block-container {
+            padding-top: 2.5rem;
+            padding-bottom: 3rem;
+        }
+
+        h1, h2, h3 {
+            color: var(--budgetify-text);
+            letter-spacing: -0.02em;
+        }
+
+        p, label, [data-testid="stCaptionContainer"] {
+            color: var(--budgetify-muted);
+        }
+
+        [data-testid="stMetric"] {
+            background: var(--budgetify-surface);
+            border: 1px solid var(--budgetify-border);
+            border-radius: 0.75rem;
+            padding: 1rem 1.1rem;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+        }
+
+        [data-testid="stMetricLabel"] {
+            color: var(--budgetify-muted);
+        }
+
+        [data-testid="stMetricValue"] {
+            color: var(--budgetify-text);
+        }
+
+        .stButton > button,
+        .stFormSubmitButton > button {
+            border: 1px solid var(--budgetify-teal);
+            border-radius: 0.5rem;
+            color: var(--budgetify-teal);
+            font-weight: 600;
+            background: transparent;
+        }
+
+        .stButton > button:hover,
+        .stFormSubmitButton > button:hover {
+            border-color: var(--budgetify-teal);
+            color: var(--budgetify-text);
+            background: #193344;
+        }
+
+        div[data-baseweb="input"] > div,
+        div[data-baseweb="select"] > div,
+        div[data-baseweb="textarea"] > div {
+            background: var(--budgetify-surface);
+            border-color: var(--budgetify-border);
+            border-radius: 0.5rem;
+        }
+
+        input, textarea {
+            color: var(--budgetify-text) !important;
+        }
+
+        [data-baseweb="select"] *,
+        [data-baseweb="input"] *,
+        [data-baseweb="textarea"] * {
+            color: var(--budgetify-text);
+        }
+
+        [data-testid="stDataFrame"] {
+            border: 1px solid var(--budgetify-border);
+            border-radius: 0.65rem;
+            overflow: hidden;
+        }
+
+        [data-testid="stSidebar"] {
+            background: var(--budgetify-sidebar);
+            border-right: 1px solid var(--budgetify-border);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stMetric"] {
+            background: var(--budgetify-surface);
+        }
+
+        [data-testid="stAlert"] {
+            background: var(--budgetify-surface);
+            border-color: var(--budgetify-border);
+            color: var(--budgetify-text);
+        }
+
+        .st-key-budgetify-cash-flow-header {
+            background: var(--budgetify-sidebar);
+            border-radius: 0.5rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.title("Budgetify")
     st.caption("A budgeting assistant for international students")
     initialize_cash_flow_state()
