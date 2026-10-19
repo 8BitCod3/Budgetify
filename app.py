@@ -14,6 +14,12 @@ from src.finance import (
     spending_by_category,
     total_by_type,
 )
+from src.insights import (
+    assess_budget,
+    generate_recommendations,
+    identify_projected_shortfalls,
+    summarize_expenses_by_category,
+)
 from src.storage import (
     StorageError,
     clear_personal_state,
@@ -256,6 +262,99 @@ def categories_for_event_type(event_type: str) -> tuple[str, ...]:
         raise ValueError(
             "event_type must be 'income' or 'expense'"
         ) from error
+
+
+def render_financial_insights(
+    transactions: pd.DataFrame,
+    budget_limit: float,
+    initial_balance: float,
+    events: list[dict[str, object]],
+    currency: str,
+) -> None:
+    """Render deterministic insights without changing existing dashboard flows."""
+    st.subheader("Financial Insights")
+    st.caption(
+        "Insights are descriptive summaries of the synthetic transaction data and "
+        "the selected cash-flow schedule; they are not financial advice."
+    )
+    records = transactions.to_dict(orient="records")
+    try:
+        category_summary = summarize_expenses_by_category(records)
+        budget_assessment = assess_budget(records, budget_limit)
+        shortfalls = identify_projected_shortfalls(initial_balance, events)
+        recommendations = generate_recommendations(
+            category_summary,
+            budget_assessment,
+            shortfalls,
+        )
+    except ValueError as error:
+        st.error(f"Unable to calculate financial insights: {error}")
+        return
+
+    summary_column, budget_column = st.columns(2)
+    with summary_column:
+        st.markdown("**Expense categories**")
+        if category_summary:
+            category_rows = [
+                {
+                    "Category": category.title(),
+                    "Amount": format_amount(float(values["amount"]), currency),
+                    "Share of expenses": f"{values['percentage']:.2f}%",
+                }
+                for category, values in category_summary.items()
+            ]
+            st.dataframe(
+                pd.DataFrame(category_rows),
+                hide_index=True,
+                use_container_width=True,
+            )
+        else:
+            st.info("No expense transactions are available to summarize.")
+
+    with budget_column:
+        st.markdown("**Budget assessment**")
+        status_labels = {
+            "within_budget": "Within budget",
+            "approaching": "Approaching budget",
+            "exceeded": "Budget exceeded",
+            "no_budget": "No budget set",
+        }
+        st.metric(
+            "Budget status",
+            status_labels[budget_assessment["status"]],
+        )
+        st.write(
+            f"Actual expenses: "
+            f"{format_amount(float(budget_assessment['expenses']), currency)}"
+        )
+        st.write(
+            f"Budget limit: "
+            f"{format_amount(float(budget_assessment['limit']), currency)}"
+        )
+        st.write(
+            f"Budget used: {budget_assessment['percentage_used']:.2f}%"
+        )
+        if budget_assessment["status"] == "no_budget":
+            st.info("Set a positive monthly budget to assess utilization.")
+        elif budget_assessment["status"] == "exceeded":
+            st.warning("Actual expenses have reached or exceeded the budget limit.")
+        elif budget_assessment["status"] == "approaching":
+            st.warning("Actual expenses are approaching the budget limit.")
+
+    st.markdown("**Projected cash-flow shortfalls**")
+    if shortfalls:
+        for shortfall in shortfalls:
+            st.warning(
+                f"{shortfall['date']}: {shortfall['description']} would leave a "
+                f"projected shortfall of "
+                f"{format_amount(float(shortfall['shortfall']), currency)}."
+            )
+    else:
+        st.success("No projected cash-flow shortfalls were identified.")
+
+    st.markdown("**Recommendations**")
+    for recommendation in recommendations:
+        st.write(f"- {recommendation}")
 
 
 def render_cash_flow(display_currency: str) -> None:
@@ -624,6 +723,18 @@ def main() -> None:
         )
 
     render_cash_flow(display_currency)
+    active_initial_balance = (
+        DEMO_INITIAL_BALANCE
+        if st.session_state.cash_flow_mode == "Demo Mode"
+        else st.session_state.personal_initial_balance
+    )
+    render_financial_insights(
+        transactions,
+        spending_limit,
+        active_initial_balance,
+        st.session_state.cash_flow_events,
+        display_currency,
+    )
 
 
 if __name__ == "__main__":
