@@ -1,6 +1,8 @@
 from pathlib import Path
 from copy import deepcopy
+import calendar
 from datetime import date
+from decimal import Decimal
 from uuid import uuid4
 
 import pandas as pd
@@ -290,11 +292,6 @@ def dashboard_transactions(
                 "amount": float(event["amount"]),
                 "currency": currency,
                 "type": event["type"],
-                "timing": (
-                    "Historical entry"
-                    if str(event["date"]) < date.today().isoformat()
-                    else "Upcoming scheduled entry"
-                ),
             }
             for event in events
         ],
@@ -305,13 +302,169 @@ def dashboard_transactions(
             "amount",
             "currency",
             "type",
-            "timing",
         ],
     )
     return (
         personal_transactions,
         "Scheduled personal cash-flow entries",
         "Net scheduled cash flow",
+    )
+
+
+def todays_expenses(
+    events: list[dict[str, object]],
+    currency: str,
+    today: date | None = None,
+) -> tuple[pd.DataFrame, float]:
+    """Return only personal expense entries dated today and their total."""
+    selected_date = today or date.today()
+    matching_events = [
+        event
+        for event in events
+        if event["type"] == "expense"
+        and str(event["date"]) == selected_date.isoformat()
+    ]
+    expenses = pd.DataFrame(
+        [
+            {
+                "Date": event["date"],
+                "Description": event["description"],
+                "Category": event["category"],
+                "Amount": format_amount(float(event["amount"]), currency),
+                "Currency": currency,
+                "Type": event["type"],
+            }
+            for event in matching_events
+        ],
+        columns=[
+            "Date",
+            "Description",
+            "Category",
+            "Amount",
+            "Currency",
+            "Type",
+        ],
+    )
+    total = sum(float(event["amount"]) for event in matching_events)
+    return expenses, round(total, 2)
+
+
+def todays_transactions(
+    events: list[dict[str, object]],
+    currency: str,
+    today: date | None = None,
+) -> tuple[pd.DataFrame, float, float]:
+    """Return today's personal entries and independent income/expense totals."""
+    selected_date = today or date.today()
+    matching_events = [
+        event
+        for event in events
+        if str(event["date"]) == selected_date.isoformat()
+    ]
+    transactions = pd.DataFrame(
+        [
+            {
+                "Date": event["date"],
+                "Description": event["description"],
+                "Category": event["category"],
+                "Amount": format_amount(float(event["amount"]), currency),
+                "Currency": currency,
+                "Type": event["type"],
+            }
+            for event in matching_events
+        ],
+        columns=[
+            "Date",
+            "Description",
+            "Category",
+            "Amount",
+            "Currency",
+            "Type",
+        ],
+    )
+    income_total = sum(
+        float(event["amount"])
+        for event in matching_events
+        if event["type"] == "income"
+    )
+    expense_total = sum(
+        float(event["amount"])
+        for event in matching_events
+        if event["type"] == "expense"
+    )
+    return transactions, round(income_total, 2), round(expense_total, 2)
+
+
+def cash_flow_display_table(
+    cash_flow: list[dict[str, object]],
+    currency: str,
+) -> pd.DataFrame:
+    """Build the projected cash-flow table without internal event identifiers."""
+    display_columns = [
+        "date",
+        "description",
+        "type",
+        "category",
+        "amount",
+        "projected_balance",
+        "is_shortfall",
+        "shortfall",
+    ]
+    table = pd.DataFrame(cash_flow)[display_columns].rename(
+        columns={
+            "date": "Date",
+            "description": "Description",
+            "type": "Type",
+            "category": "Category",
+            "amount": "Amount",
+            "projected_balance": "Projected balance",
+            "is_shortfall": "Shortfall?",
+            "shortfall": "Projected shortfall",
+        }
+    )
+    table["Amount"] = table["Amount"].apply(
+        lambda amount: format_amount(float(amount), currency)
+    )
+    table["Projected balance"] = table["Projected balance"].apply(
+        lambda amount: format_amount(float(amount), currency)
+    )
+    table["Projected shortfall"] = table["Projected shortfall"].apply(
+        lambda amount: format_amount(float(amount), currency)
+    )
+    return table
+
+
+def month_end_projection(
+    initial_balance: float,
+    events: list[dict[str, object]],
+    selected_date: date | None = None,
+) -> tuple[date, object]:
+    selected_date = selected_date or date.today()
+    month_end = date(
+        selected_date.year,
+        selected_date.month,
+        calendar.monthrange(selected_date.year, selected_date.month)[1],
+    )
+    relevant_events = [
+        event for event in events if str(event["date"]) <= month_end.isoformat()
+    ]
+    projection = project_cash_flow(initial_balance, relevant_events)
+    ending_balance = (
+        projection[-1]["projected_balance"]
+        if projection
+        else Decimal(str(initial_balance))
+    )
+    return month_end, ending_balance
+
+
+def maximum_projected_shortfall(
+    initial_balance: float,
+    events: list[dict[str, object]],
+) -> Decimal:
+    projection = project_cash_flow(initial_balance, events)
+    return max(
+        (event["shortfall"] for event in projection),
+        default=Decimal("0.00"),
     )
 
 
@@ -442,6 +595,7 @@ def render_ask_budgetify(
                 cash_flow_scope=cash_flow_scope,
                 budget_scope=budget_scope,
                 currency=currency,
+                question=question,
             )
             try:
                 streamlit_secrets = st.secrets
@@ -640,12 +794,18 @@ def render_cash_flow(display_currency: str) -> None:
         return
 
     if cash_flow:
-        remove_columns = st.columns(len(cash_flow))
-        for column, event in zip(remove_columns, cash_flow):
-            if column.button(
-                f"Remove {event['description']}",
-                key=f"remove_cash_flow_{event['id']}",
-            ):
+        st.markdown("**Remove an event**")
+        for event in cash_flow:
+            event_row, remove_column = st.columns((5, 1))
+            with event_row:
+                st.write(f"{event['description']} — {event['date']}")
+            with remove_column:
+                remove_event = st.button(
+                    "Remove",
+                    key=f"remove_cash_flow_{event['id']}",
+                    use_container_width=True,
+                )
+            if remove_event:
                 st.session_state.cash_flow_events = [
                     item
                     for item in st.session_state.cash_flow_events
@@ -675,35 +835,39 @@ def render_cash_flow(display_currency: str) -> None:
     else:
         st.success("No projected shortfalls in the selected planning schedule.")
 
-    cash_flow_table = pd.DataFrame(cash_flow).rename(
-        columns={
-            "date": "Date",
-            "description": "Description",
-            "type": "Type",
-            "category": "Category",
-            "amount": "Amount",
-            "projected_balance": "Projected balance",
-            "is_shortfall": "Shortfall?",
-            "shortfall": "Projected shortfall",
-        }
-    )
-    cash_flow_table["Timing"] = cash_flow_table["Date"].apply(
-        lambda event_date: (
-            "Historical entry"
-            if event_date < date.today()
-            else "Upcoming scheduled entry"
-        )
-    )
-    cash_flow_table["Amount"] = cash_flow_table["Amount"].apply(
-        lambda amount: format_amount(float(amount), display_currency)
-    )
-    cash_flow_table["Projected balance"] = cash_flow_table[
-        "Projected balance"
-    ].apply(lambda amount: format_amount(float(amount), display_currency))
-    cash_flow_table["Projected shortfall"] = cash_flow_table[
-        "Projected shortfall"
-    ].apply(lambda amount: format_amount(float(amount), display_currency))
+    cash_flow_table = cash_flow_display_table(cash_flow, display_currency)
     st.dataframe(cash_flow_table, hide_index=True, use_container_width=True)
+
+    if selected_mode == "Personal Planning Mode":
+        projection_view, shortfall_view = st.tabs(
+            ["Projected Month-End Balance", "Projected Shortfall"]
+        )
+        with projection_view:
+            month_end, ending_balance = month_end_projection(
+                initial_balance,
+                events,
+            )
+            st.metric(
+                f"Projected balance on {month_end.strftime('%B %d, %Y')}",
+                format_amount(float(ending_balance), display_currency),
+            )
+            st.caption(
+                "Opening balance plus all supplied events through the final day "
+                "of the current calendar month."
+            )
+        with shortfall_view:
+            maximum_shortfall = maximum_projected_shortfall(
+                initial_balance,
+                events,
+            )
+            st.metric(
+                "Maximum projected shortfall",
+                format_amount(float(maximum_shortfall), display_currency),
+            )
+            st.caption(
+                "The largest negative projected balance across the full active "
+                "schedule; later income does not erase an earlier shortfall."
+            )
 
 
 def main() -> None:
@@ -844,8 +1008,6 @@ def main() -> None:
             "currency": "Currency",
             "type": "Type",
         }
-        if "timing" in filtered.columns:
-            display_columns["timing"] = "Timing"
         history = filtered[list(display_columns)].rename(columns=display_columns)
         history["Amount"] = history.apply(
             lambda row: format_amount(row["Amount"], row["Currency"]),
@@ -856,6 +1018,32 @@ def main() -> None:
             hide_index=True,
             use_container_width=True,
         )
+
+    st.subheader("Today's Transactions")
+    if active_mode != "Personal Planning Mode":
+        st.info("Today's Transactions is available in Personal Planning Mode only.")
+    else:
+        today_table, today_income, today_expenses_total = todays_transactions(
+            st.session_state.cash_flow_events,
+            display_currency,
+        )
+        today_income_column, today_expenses_column = st.columns(2)
+        today_income_column.metric(
+            "Today's Income",
+            format_amount(today_income, display_currency),
+        )
+        today_expenses_column.metric(
+            "Today's Expenses",
+            format_amount(today_expenses_total, display_currency),
+        )
+        if today_table.empty:
+            st.info("No personal transactions are scheduled for today.")
+        else:
+            st.dataframe(
+                today_table,
+                hide_index=True,
+                use_container_width=True,
+            )
 
     render_cash_flow(display_currency)
     active_initial_balance = (

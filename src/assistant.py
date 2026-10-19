@@ -25,6 +25,7 @@ from src.insights import (
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 MAX_QUESTION_LENGTH = 2000
 MAX_RESPONSE_LENGTH = 4000
+DATE_RANGE_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b.*?\b(\d{4}-\d{2}-\d{2})\b")
 
 
 class AssistantError(Exception):
@@ -71,6 +72,29 @@ def _money(value: object, currency: str = "") -> str:
     return f"{currency} {formatted}" if currency else formatted
 
 
+def _expense_total(
+    transactions: Iterable[Transaction],
+    start: date | None = None,
+    end: date | None = None,
+) -> object:
+    total = 0.0
+    for transaction in transactions:
+        if transaction.get("type") != "expense":
+            continue
+        if "date" not in transaction:
+            if start is not None or end is not None:
+                continue
+            total += float(transaction["amount"])
+            continue
+        transaction_date = date.fromisoformat(str(transaction["date"]))
+        if start is not None and transaction_date < start:
+            continue
+        if end is not None and transaction_date > end:
+            continue
+        total += float(transaction["amount"])
+    return round(total, 2)
+
+
 def build_context(
     transactions: Iterable[Transaction],
     budget_limit: object,
@@ -81,6 +105,7 @@ def build_context(
     cash_flow_scope: str = "active selected-mode scheduled cash-flow aggregates",
     budget_scope: str = "all supplied active entries; no date-bounded reporting period",
     currency: str = "",
+    question: str = "",
 ) -> dict[str, object]:
     """Build aggregate facts only; raw records and descriptions are excluded."""
     transaction_records = tuple(transactions)
@@ -90,6 +115,20 @@ def build_context(
     projection = project_cash_flow(initial_balance, event_records)
     shortfalls = identify_projected_shortfalls(initial_balance, event_records)
     today = date.today()
+    requested_range = DATE_RANGE_PATTERN.search(question)
+    range_summary = None
+    if requested_range:
+        start = date.fromisoformat(requested_range.group(1))
+        end = date.fromisoformat(requested_range.group(2))
+        if start > end:
+            start, end = end, start
+        range_summary = {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "expenses": _money(
+                _expense_total(transaction_records, start, end), currency
+            ),
+        }
     return {
         "transaction_scope": transaction_scope,
         "cash_flow_scope": cash_flow_scope,
@@ -116,6 +155,10 @@ def build_context(
             "percentage_used": _money(budget["percentage_used"]),
             "status": budget["status"],
         },
+        "spending_through_today": _money(
+            _expense_total(transaction_records, end=today), currency
+        ),
+        "requested_date_range_spending": range_summary,
         "cash_flow_event_count": len(event_records),
         "cash_flow_historical_event_count": sum(
             1

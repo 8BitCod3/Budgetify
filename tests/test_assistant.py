@@ -192,3 +192,21 @@ def test_context_exposes_historical_and_upcoming_counts_without_descriptions():
         == "initial balance is the opening balance before the earliest supplied event"
     )
     assert "private detail" not in repr(context)
+
+
+def test_context_calculates_today_and_inclusive_requested_range_spending():
+    context = build_context(
+        [
+            {"date": "2026-10-01", "type": "expense", "category": "food", "amount": 10},
+            {"date": "2026-10-20", "type": "expense", "category": "rent", "amount": 20},
+            {"date": "2026-10-21", "type": "expense", "category": "bills", "amount": 30},
+            {"date": "2026-10-20", "type": "income", "amount": 500},
+        ],
+        1000,
+        0,
+        [],
+        currency="USD",
+        question="How much from 2026-10-01 to 2026-10-20?",
+    )
+    assert context["requested_date_range_spending"]["expenses"] == "USD 30.00"
+    assert context["spending_through_today"] == "USD 30.00"
