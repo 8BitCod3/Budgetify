@@ -1,4 +1,5 @@
 import pandas as pd
+from decimal import Decimal
 
 from app import dashboard_transactions
 from src.finance import budget_summary, net_balance, total_by_type
@@ -24,7 +25,7 @@ PERSONAL_EVENTS = [
         "date": "2026-11-01",
         "description": "Personal grant",
         "category": "grant",
-        "amount": 1000.0,
+        "amount": Decimal("1000.00"),
         "type": "income",
     },
     {
@@ -32,7 +33,7 @@ PERSONAL_EVENTS = [
         "date": "2026-11-02",
         "description": "Personal rent",
         "category": "rent",
-        "amount": 400.0,
+        "amount": Decimal("400.00"),
         "type": "expense",
     },
 ]

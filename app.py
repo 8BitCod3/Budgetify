@@ -287,7 +287,7 @@ def dashboard_transactions(
                 "date": event["date"],
                 "description": event["description"],
                 "category": event["category"],
-                "amount": event["amount"],
+                "amount": float(event["amount"]),
                 "currency": currency,
                 "type": event["type"],
             }
@@ -682,7 +682,7 @@ def main() -> None:
     st.set_page_config(page_title="Budgetify", page_icon="💸", layout="wide")
     st.title("Budgetify")
     st.caption("A budgeting assistant for international students")
-    initialize_persistent_state()
+    initialize_cash_flow_state()
 
     with st.sidebar:
         st.header("Monthly Budget")

@@ -153,3 +153,23 @@ def test_initialization_recovers_missing_durable_balance_from_saved_state(
     app.initialize_persistent_state()
 
     assert session_state["personal_initial_balance"] == 125.5
+
+
+def test_cash_flow_state_initializes_when_persistent_state_already_exists(
+    monkeypatch,
+):
+    session_state = SessionState(
+        {
+            "persistent_state_initialized": True,
+            "cash_flow_mode": "Demo Mode",
+            "personal_cash_flow_events": [],
+            "personal_initial_balance": 0.0,
+            "spending_limit": 500.0,
+        }
+    )
+    monkeypatch.setattr(app, "st", SimpleNamespace(session_state=session_state))
+
+    app.initialize_cash_flow_state()
+
+    assert "cash_flow_events" in session_state
+    assert len(session_state["cash_flow_events"]) == len(app.SAMPLE_CASH_FLOW_EVENTS)
